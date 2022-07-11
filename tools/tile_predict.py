@@ -1,4 +1,5 @@
-import gdal
+#import gdal
+from osgeo import gdal
 import numpy as np
 from tensorflow.keras.models import load_model
 from models import segnet_model
@@ -49,8 +50,8 @@ def gridwise_sample(imgarray, patchsize, rs):
     return patchsamples, patchidx
 
 
-def image_from_patches(result, idx, patchsize, t_rows, t_cols):
-    outimage = np.zeros((t_rows, t_cols, 1))
+def image_from_patches(result, idx, patchsize, t_rows, t_cols, c=1):
+    outimage = np.zeros((t_rows, t_cols, c))
     if len(result) == len(idx):
         for k in range(len(idx)):
             i, j = idx[k][0], idx[k][1]
@@ -87,6 +88,7 @@ def tile_predict(args):
         t_rows, t_cols, t_chan = image_array.shape
         image_patches, patchidx = gridwise_sample(image_array, p_rows, rs) #Tile size takes from image and patch size from trained model
         result = np.zeros(shape=(0, p_rows, p_cols, 1))
+        result_copy=np.zeros(shape=(0, p_rows, p_cols, args.num_classes))   ###no. of classes
         print(result.shape)
         for j in range(image_patches.shape[0]):
             patch = np.expand_dims(image_patches[j], axis=0)
@@ -94,16 +96,19 @@ def tile_predict(args):
             if args.num_classes == 1:
                 patch_result = patch_result
             elif args.num_classes > 1:
+                patch_copy=patch_result.copy()
                 patch_result = np.expand_dims(np.argmax(patch_result, axis=3), axis=-1)
             result = np.concatenate((result, patch_result), axis=0)
+            result_copy = np.concatenate((result_copy, patch_copy), axis=0)
         # print(result.shape)
         result_array = image_from_patches(result, patchidx, p_rows, t_rows, t_cols)
+        result_array_copy=image_from_patches(result_copy, patchidx, p_rows, t_rows, t_cols, args.num_classes)
         # result_array = np.reshape(result_array, (args.tile_size, args.tile_size))  #  Value between 0 and 1
         result_array = np.reshape(result_array, (t_rows, t_cols))  # Binary, 0 and 1
         filename = os.path.splitext(os.path.basename(image_paths[i]))[0]
         outfile = args.output_folder + filename
         outfile = outfile + ".tif"  # Line for jpg, png, and tiff formats
-        outdata = outdriver.Create(str(outfile), t_rows, t_cols, 1, gdal.GDT_Int16)
+        outdata = outdriver.Create(str(outfile),t_cols,t_rows, 1, gdal.GDT_Int16)    ##interchnage t_rows, t_cols to t_cols,t_rows for png
         outdata.GetRasterBand(1).WriteArray(result_array)
         if image.GetProjection() and image.GetGeoTransform():
             proj = image.GetProjection()
@@ -111,6 +116,8 @@ def tile_predict(args):
             outdata.SetProjection(proj)
             outdata.SetGeoTransform(trans)
         print("Predicted " + str(i + 1) + " Images")
+    return result_array,result_array_copy
+
 
 
 if __name__ == '__main__':
@@ -124,4 +131,5 @@ if __name__ == '__main__':
     parser.add_argument("--num_classes", type=int, help="Number of classes")
     parser.add_argument("--rs", type=int, help="Radiometric resolution of the image", default=8)
     args = parser.parse_args()
-    tile_predict(args)
+    result_array,result_array_copy=tile_predict(args)
+    np.save(args.output_folder+"prediction_prob.npy",result_array_copy)
